@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="op_camas_detalle">Estado de camas en tiempo real.</string>
+    <string name="op_camas_motivo_ayuda">Queda registrado en el historial de la cama.</string>
+    <string name="op_camas_libres">Libres</string>
+    <string name="op_camas_ocupadas">Ocupadas</string>
+    <string name="op_camas_total">Total</string>
+    <string name="op_amb_unidad">Unidad</string>
+</resources>

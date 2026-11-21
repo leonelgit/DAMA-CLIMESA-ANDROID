@@ -1,0 +1,107 @@
+package sv.edu.catolica.climesa.ui
+
+import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
+
+
+/** Shared presentation primitives. They add hierarchy and motion without owning business state. */
+@Composable
+internal fun ClimesaCard(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth().animateContentSize(motionTween(Motion.STANDARD)),
+        color = MaterialTheme.colorScheme.surface,
+        shape = MaterialTheme.shapes.medium,
+        border = cardBorder(),
+        shadowElevation = 1.dp,
+        content = content,
+    )
+}
+
+@Composable
+internal fun ClimesaClickableCard(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth().animateContentSize(motionTween(Motion.STANDARD)),
+        color = MaterialTheme.colorScheme.surface,
+        shape = MaterialTheme.shapes.medium,
+        border = cardBorder(),
+        shadowElevation = 1.dp,
+        content = content,
+    )
+}
+
+/**
+ * Legacy page header, now a [CompactHeader] (S1): the eyebrow becomes the small breadcrumb and the description is no longer
+ * shown. "Rol / CLIMESA" style breadcrumbs repeat what the top bar already says, so only a real label is kept.
+ */
+@Composable
+internal fun SectionIntro(
+    eyebrow: String,
+    title: String,
+    @Suppress("UNUSED_PARAMETER") detail: String? = null,
+    modifier: Modifier = Modifier,
+) = CompactHeader(title, modifier, breadcrumb = eyebrow.takeIf { it.isNotBlank() && !it.contains(" / ") })
+
+@Composable
+internal fun ClimesaButton(
+    text: String,
+    icon: ImageVector,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    outlined: Boolean = false,
+) {
+    if (outlined) SecondaryButton(text, onClick, modifier, icon, enabled) else PrimaryButton(text, onClick, modifier, icon, enabled)
+}
+
+@Composable
+internal fun ClimesaActionGroup(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+        content = content,
+    )
+}
+
+@Composable
+internal fun InlineStatus(
+    text: String,
+    icon: ImageVector,
+    modifier: Modifier = Modifier,
+) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+        Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}

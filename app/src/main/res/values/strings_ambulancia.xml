@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Ambulancia, ronda 2: solicitante, mantenimiento y bitácora. -->
+    <string name="amb_expediente">Expediente</string>
+    <string name="amb_donde">Dónde está</string>
+    <string name="amb_estado_desde">En este estado desde %1$s</string>
+    <string name="amb_estado_motivo">Motivo registrado: %1$s</string>
+    <string name="amb_buscar">Buscar en la bitácora</string>
+    <string name="amb_buscar_pista">Lugar, municipio o tripulación</string>
+    <string name="amb_filtros">Filtros</string>
+    <string name="amb_filtros_n">Filtros (%1$d)</string>
+    <string name="amb_quitar_filtros">Quitar filtros</string>
+    <string name="amb_todas">Todas</string>
+    <string name="amb_estado_final">Estado final</string>
+    <string name="amb_tipo">Tipo</string>
+    <plurals name="amb_servicios_n">
+        <item quantity="one">%1$d servicio</item>
+        <item quantity="other">%1$d servicios</item>
+    </plurals>
+    <string name="amb_bitacora_sin_resultados">Ningún servicio coincide con la búsqueda y los filtros.</string>
+    <!-- Auditoría del flujo de ambulancia. -->
+    <string name="amb_ultima_solicitud">Tu última solicitud</string>
+    <string name="amb_motivo_descarte">Motivo de despacho</string>
+    <string name="amb_dias_anteriores">Días anteriores · %1$d servicios</string>
+    <string name="amb_dias_anteriores_ocultar">Ocultar días anteriores</string>
+    <string name="amb_en_curso_filtro">En curso</string>
+    <string name="amb_siguiente_admision">Siguiente paso: Recepción ingresa al paciente en Admisión con origen «Ambulancia».</string>
+    <string name="par_abrir_bitacora">Ver la bitácora completa</string>
+</resources>

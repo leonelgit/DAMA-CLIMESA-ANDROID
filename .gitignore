@@ -1,0 +1,31 @@
+# Gradle / Android Studio
+/.gradle/
+**/.gradle/
+**/build/
+/local.properties
+**/local.properties
+!**/local.properties.example
+/.idea/
+*.iml
+
+# Artefactos y firmas: nunca se suben
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Entorno
+**/.env
+**/.env.*
+!**/.env.example
+*.log
+
+# Sistema y editores
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# Login de prueba (TEMPORAL): contraseñas de cuentas ficticias, nunca se suben
+demo-credenciales.json

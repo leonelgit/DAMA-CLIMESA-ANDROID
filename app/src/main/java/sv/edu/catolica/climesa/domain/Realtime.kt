@@ -1,0 +1,220 @@
+package sv.edu.catolica.climesa.domain
+
+import org.json.JSONObject
+
+/** Evento delgado de dominio (docs/arquitectura/tiempo-real.md): solo dice qué cambió, nunca datos clínicos. */
+data class EventoDominio(val type: String, val entity: String, val id: String, val version: Long?)
+
+enum class ConnectionState { LIVE, RECONNECTING, OFFLINE }
+
+/** Lo que una pantalla recibe del repositorio de tiempo real. */
+sealed interface RealtimeSignal {
+    data class Event(val event: EventoDominio) : RealtimeSignal
+    data class State(val state: ConnectionState) : RealtimeSignal
+
+    /** Hay que volver a pedir los datos: se suscribió un canal o se recuperó lo perdido tras una caída. */
+    object Resync : RealtimeSignal
+
+    /** Aviso no fatal: estos canales fueron rechazados 3 veces seguidas y se dejaron fuera; el resto sigue en vivo. */
+    data class ChannelsDropped(val channels: Set<String>) : RealtimeSignal
+}
+
+/** Respuesta de `GET /eventos?after=<seq>`. */
+data class CatchUp(val cursor: String, val events: List<EventoDominio>)
+
+sealed interface RealtimeFrame {
+    data class JoinReply(val channel: String, val ok: Boolean) : RealtimeFrame
+    data class Broadcast(val channel: String, val event: EventoDominio) : RealtimeFrame
+    data class ChannelClosed(val channel: String) : RealtimeFrame
+    data class HeartbeatReply(val ref: String) : RealtimeFrame
+    object Ignored : RealtimeFrame
+}
+
+/** Protocolo Phoenix de Supabase Realtime (vsn 1.0.0, JSON). Código puro para poder probarlo sin red. */
+object RealtimeProtocol {
+    private const val PREFIX = "realtime:"
+    const val PUBLIC_CHANNEL = "publico"
+
+    fun topic(channel: String) = PREFIX + channel
+
+    fun websocketUrl(supabaseUrl: String, publishableKey: String): String {
+        val base = supabaseUrl.trim().trimEnd('/').replaceFirst("https://", "wss://").replaceFirst("http://", "ws://")
+        return "$base/realtime/v1/websocket?apikey=$publishableKey&vsn=1.0.0"
+    }
+
+    /** Los canales distintos de `publico` son privados y exigen el token de la sesión. */
+    fun join(channel: String, ref: String, accessToken: String): String {
+        val config = JSONObject()
+            .put("broadcast", JSONObject().put("ack", false).put("self", false))
+            .put("presence", JSONObject().put("key", ""))
+            .put("postgres_changes", org.json.JSONArray())
+            .put("private", channel != PUBLIC_CHANNEL)
+        val payload = JSONObject().put("config", config).put("access_token", accessToken)
+        return frame(topic(channel), "phx_join", payload, ref, ref)
+    }
+
+    /** Latido del protocolo para mantener abierto el socket; no consulta datos. */
+    fun heartbeat(ref: String): String = frame("phoenix", "heartbeat", JSONObject(), ref, null)
+
+    /** Renueva el token en un canal ya unido (evento `access_token` de Phoenix). */
+    fun accessToken(channel: String, ref: String, accessToken: String): String =
+        frame(topic(channel), "access_token", JSONObject().put("access_token", accessToken), ref, null)
+
+    private fun frame(topic: String, event: String, payload: JSONObject, ref: String, joinRef: String?): String {
+        val json = JSONObject().put("topic", topic).put("event", event).put("payload", payload).put("ref", ref)
+        if (joinRef != null) json.put("join_ref", joinRef)
+        return json.toString()
+    }
+
+    fun parse(text: String): RealtimeFrame {
+        val json = runCatching { JSONObject(text) }.getOrNull() ?: return RealtimeFrame.Ignored
+        val topic = json.optString("topic")
+        if (topic == "phoenix") {
+            val ref = json.optString("ref")
+            return if (json.optString("event") == "phx_reply" && ref.isNotBlank() && ref != "null") RealtimeFrame.HeartbeatReply(ref) else RealtimeFrame.Ignored
+        }
+        if (!topic.startsWith(PREFIX)) return RealtimeFrame.Ignored
+        val channel = topic.removePrefix(PREFIX)
+        val payload = json.optJSONObject("payload")
+        return when (json.optString("event")) {
+            "phx_reply" -> RealtimeFrame.JoinReply(channel, payload?.optString("status") == "ok")
+            "phx_close", "phx_error" -> RealtimeFrame.ChannelClosed(channel)
+            "broadcast" -> {
+                val carga = payload?.optJSONObject("payload") ?: return RealtimeFrame.Ignored
+                val type = carga.optString("tipo").ifBlank { payload.optString("event") }
+                if (type.isBlank()) RealtimeFrame.Ignored
+                else RealtimeFrame.Broadcast(channel, toEvent(type, carga.optString("entidad"), carga.opt("id"), carga.opt("version")))
+            }
+            else -> RealtimeFrame.Ignored
+        }
+    }
+
+    /** `GET /eventos`: `tipo` and `entidad` (tiempo-real.md); the deprecated `type` / `entity` aliases are only a fallback. */
+    fun parseCatchUp(json: JSONObject): CatchUp {
+        val rows = json.optJSONArray("events")
+        val events = (0 until (rows?.length() ?: 0)).mapNotNull { i ->
+            rows!!.optJSONObject(i)?.let {
+                toEvent(it.optString("tipo").ifBlank { it.optString("type") }, it.optString("entidad").ifBlank { it.optString("entity") }, it.opt("id"), it.opt("version"))
+            }
+        }
+        return CatchUp(json.opt("cursor")?.toString() ?: "0", events)
+    }
+
+    private fun toEvent(type: String, entity: String, id: Any?, version: Any?): EventoDominio =
+        EventoDominio(
+            type,
+            entity,
+            id?.takeUnless { it == JSONObject.NULL }?.toString().orEmpty(),
+            (version as? Number)?.toLong() ?: version?.takeUnless { it == JSONObject.NULL }?.toString()?.toLongOrNull(),
+        )
+}
+
+/** Filtros puros de eventos: cada pantalla decide qué entidades le importan y vuelve a pedir sus datos. */
+object LiveEntities {
+    fun matches(event: EventoDominio, vararg entities: String) =
+        event.entity in entities || entities.any { event.type.startsWith("$it.") }
+}
+
+/** Filtro de eventos que le importan al tablero de camas. `espacio` cubre mover o desactivar una cama. */
+object BedEvents {
+    fun matches(event: EventoDominio) = LiveEntities.matches(event, "cama", "espacio")
+}
+
+object PatientEvents {
+    fun matches(event: EventoDominio) = LiveEntities.matches(event, "paciente")
+
+    /**
+     * Qué volver a pedir al llegar un evento de paciente. Con una búsqueda activa no se reemplaza la lista (los
+     * candidatos son un resultado de búsqueda), solo se refresca la ficha o el paciente conocido.
+     */
+    sealed interface Refresh {
+        object None : Refresh
+        data class Detail(val id: String) : Refresh
+        object List : Refresh
+    }
+
+    fun refreshFor(event: EventoDominio, knownIds: Set<String>, selectedId: String?, searchActive: Boolean): Refresh {
+        if (!matches(event)) return Refresh.None
+        if (event.id.isNotBlank() && (event.id in knownIds || event.id == selectedId)) return Refresh.Detail(event.id)
+        return if (searchActive) Refresh.None else Refresh.List
+    }
+}
+
+/**
+ * Se vuelve a leer `/auth/me` y se vuelven a unir los canales cuando cambia la cuenta. Resolver la vinculación
+ * (`vinculacion.resuelta`) cambia el expediente enlazado (`patientId`), así que también refresca el perfil.
+ */
+object ProfileEvents {
+    fun matches(event: EventoDominio) = LiveEntities.matches(event, "usuario") || event.type == "vinculacion.resuelta"
+}
+
+/** Qué eventos refrescan cada pantalla del portal por rol, según la ruta que carga. */
+object PortalEvents {
+    fun matches(path: String?, event: EventoDominio): Boolean = when {
+        path == null -> false
+        // Audit 2 D8: the home summary also counts staff, accounts, shifts and admissions.
+        path.startsWith("/inicio") -> BedEvents.matches(event) || PatientEvents.matches(event) || LiveEntities.matches(event, "personal", "usuario", "turno", "admision")
+        path.startsWith("/turnos") -> LiveEntities.matches(event, "turno", "personal")
+        path.startsWith("/pacientes") -> PatientEvents.matches(event)
+        path.startsWith("/admisiones") -> LiveEntities.matches(event, "admision", "alta", "cama")
+        // La ubicación en vivo llega cada pocos segundos y no cambia esta vista; la tripulación de turno sí (RN-30).
+        path.startsWith("/ambulancia") -> (LiveEntities.matches(event, "ambulancia", "unidad", "solicitud", "servicio") && event.type != "ambulancia.ubicacion") || LiveEntities.matches(event, "turno")
+        else -> false
+    }
+}
+
+/** Appointment lists and booking: appointments publish `cita.*`; free slots depend on the doctor's shifts (`turno`). */
+object AppointmentEvents {
+    fun matches(event: EventoDominio) = LiveEntities.matches(event, "cita", "turno")
+}
+
+/** Queue screen: tickets publish `fila.actualizada` on entity `ticket_fila`. */
+object QueueEvents {
+    fun matches(event: EventoDominio) = LiveEntities.matches(event, "ticket_fila", "fila")
+}
+
+/** Laboratory screen: orders publish `laboratorio.*` on entity `orden_laboratorio`. */
+object LaboratoryEvents {
+    fun matches(event: EventoDominio) = LiveEntities.matches(event, "orden_laboratorio", "laboratorio")
+}
+
+/**
+ * RN-25: a critical value publishes `laboratorio.critico` on `orden_laboratorio`, only to the lab role and the requesting and attending doctor's
+ * `usuario:<id>` channel. Only an account that may review results gets the app-wide notice.
+ */
+object LabCriticalEvents {
+    const val TYPE = "laboratorio.critico"
+    fun notifies(event: EventoDominio, permissions: Collection<String>) =
+        event.type == TYPE && event.entity == "orden_laboratorio" && "laboratorio.revisar" in permissions
+}
+
+/** Consultation agenda: consultations publish `consulta.*`; appointments publish `cita.*`. */
+object ConsultationEvents {
+    fun matches(event: EventoDominio) = LiveEntities.matches(event, "consulta", "cita")
+}
+
+/**
+ * "Mi día" of the doctor: the agenda plus the day's queue, so it also reloads on `fila.*` / `ticket_fila` (web live
+ * scope of `/consultas`: consulta, cita, ticket_fila). Kept apart so the clinical history does not reload on the queue.
+ */
+object DoctorDayEvents {
+    fun matches(event: EventoDominio) = ConsultationEvents.matches(event) || QueueEvents.matches(event)
+}
+
+/** Admissions (including discharge) publish `admision.*` on entity `admision`. */
+object AdmissionEvents {
+    fun matches(event: EventoDominio) = LiveEntities.matches(event, "admision")
+}
+
+/**
+ * Hospitalization screen (audit 2 D8): admissions plus beds, because a bed changing state (`cama.*`) changes the suggested
+ * beds and the indicated-admissions tray. Kept apart so the history and vital signs do not reload on every bed event.
+ */
+object WardEvents {
+    fun matches(event: EventoDominio) = AdmissionEvents.matches(event) || LiveEntities.matches(event, "cama")
+}
+
+/** Inventory screen: stock movements publish `inventario.actualizado` on entity `articulo`. */
+object InventoryEvents {
+    fun matches(event: EventoDominio) = LiveEntities.matches(event, "articulo", "inventario")
+}

@@ -1,0 +1,11 @@
+{
+  "method": "POST",
+  "path": "/api/v1/consultas/{id}/signos",
+  "body": {
+    "systolic": 120,
+    "diastolic": 80,
+    "heartRate": 72,
+    "temperature": 36.8,
+    "oxygenSaturation": 98
+  }
+}

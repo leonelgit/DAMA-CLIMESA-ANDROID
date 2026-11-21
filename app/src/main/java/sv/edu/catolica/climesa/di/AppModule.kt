@@ -1,0 +1,50 @@
+package sv.edu.catolica.climesa.di
+import android.content.Context
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
+import dagger.hilt.components.SingletonComponent
+import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import org.json.JSONObject
+import sv.edu.catolica.climesa.BuildConfig
+import sv.edu.catolica.climesa.data.*
+import sv.edu.catolica.climesa.data.realtime.*
+import sv.edu.catolica.climesa.domain.RealtimeProtocol
+@Module
+@InstallIn(SingletonComponent::class)
+object AppModule {
+    @Provides @Singleton fun auth(@ApplicationContext context:Context)=SupabaseAuthRepository(BuildConfig.SUPABASE_URL,BuildConfig.SUPABASE_PUBLISHABLE_KEY,SecureSessionStore(context),BuildConfig.WEB_URL)
+    @Provides @Singleton fun backend()=BackendAccessRepository(BuildConfig.API_BASE_URL)
+    /** One "session expired" signal for the whole app: ApiClient emits it and AuthViewModel returns to login. */
+    @Provides @Singleton fun sessionExpiry()=SessionExpiry()
+    @Provides @Singleton fun api(auth:SupabaseAuthRepository,expiry:SessionExpiry)=ApiClient(BuildConfig.API_BASE_URL,auth,expiry)
+    @Provides @Singleton fun gateway(api:ApiClient):ApiGateway=api
+    /** Reads the document picked for a lab attachment upload (T07c). */
+    @Provides @Singleton fun documents(@ApplicationContext context:Context):sv.edu.catolica.climesa.data.DocumentReader=sv.edu.catolica.climesa.data.ContentDocumentReader(context)
+    /** Local drafts of long forms, per user (see [DraftStore]). */
+    @Provides @Singleton fun drafts(@ApplicationContext context:Context):DraftStore=FileDraftStore.of(context){sv.edu.catolica.climesa.SessionActivity.timeout.touch()}
+    @Provides @Singleton fun patients(api:ApiClient):PatientRepository=RemotePatientRepository(api)
+    @Provides @Singleton fun beds(api:ApiClient):BedRepository=RemoteBedRepository(api)
+    @Provides @Singleton fun roleSource(api:ApiClient):sv.edu.catolica.climesa.ui.RoleDataSource=object:sv.edu.catolica.climesa.ui.RoleDataSource{
+        override suspend fun get(path:String):Any=api.request(path)
+        override suspend fun post(path:String,body:JSONObject):Any=api.request(path,"POST",body)
+    }
+    /** Un solo socket para toda la app: los ViewModels que piden los mismos canales lo comparten. */
+    /** Volver al frente o recuperar la red reconecta el tiempo real y cada pantalla vuelve a pedir sus datos. */
+    @Provides @Singleton fun wakeups():sv.edu.catolica.climesa.data.realtime.AppWakeups=sv.edu.catolica.climesa.data.realtime.AppWakeups()
+    @Provides @Singleton fun realtime(auth:SupabaseAuthRepository,api:ApiClient,wakeups:sv.edu.catolica.climesa.data.realtime.AppWakeups):RealtimeRepository=SharedRealtime(
+        upstream=SupabaseRealtimeRepository(
+            websocketUrl=RealtimeProtocol.websocketUrl(BuildConfig.SUPABASE_URL,BuildConfig.SUPABASE_PUBLISHABLE_KEY),
+            accessToken={auth.restoreSession()?.accessToken},
+            catchUp={cursor->RealtimeProtocol.parseCatchUp(api.request("/eventos?after=$cursor") as JSONObject)},
+            sockets=OkHttpRealtimeSocketFactory(),
+            wakeups=wakeups.wakeups,
+        ),
+        scope=CoroutineScope(SupervisorJob()+Dispatchers.Default),
+    )
+}
+
